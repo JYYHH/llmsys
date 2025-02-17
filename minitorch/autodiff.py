@@ -102,8 +102,18 @@ def topological_sort(variable: Variable) -> Iterable[Variable]:
     """
     # BEGIN ASSIGN1_1
     # TODO
-    
-    raise NotImplementedError("Task Autodiff Not Implemented Yet")
+    ret_list, visited_set = [], set()
+    def dfs_topo(node):
+        if node.unique_id in visited_set or node.is_constant():
+            return
+        visited_set.add(node.unique_id)
+        if not node.is_leaf():
+            for parent in node.parents:
+                dfs_topo(parent)
+        ret_list.append(node)
+    dfs_topo(variable)
+    # print(f"Collected = {ret_list}")
+    return ret_list[::-1]
     # END ASSIGN1_1
 
 
@@ -120,8 +130,16 @@ def backpropagate(variable: Variable, deriv: Any) -> None:
     """
     # BEGIN ASSIGN1_1
     # TODO
-   
-    raise NotImplementedError("Task Autodiff Not Implemented Yet")
+    variable.grad = deriv
+    topo_list = topological_sort(variable)
+    for node in topo_list:
+        if not (node.is_constant() or node.is_leaf()):
+            for (parent, deriv_) in node.chain_rule(node.grad):
+                if not parent.is_constant():
+                    if parent.is_leaf():
+                        parent.accumulate_derivative(deriv_)
+                    else:
+                        parent.grad = deriv_
     # END ASSIGN1_1
 
 

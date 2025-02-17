@@ -1,0 +1,4 @@
+minitorch/__pycache__
+minitorch.egg-info/*
+project/__pycache__
+tests/__pycache__
