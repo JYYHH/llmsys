@@ -149,7 +149,7 @@ __device__ void to_index(int ordinal, const int* shape, int* out_index, int num_
    *    None (Fills in out_index)
   */
     int cur_ord = ordinal;
-    for (int i = num_dims - 1; i >= 0; --i) {
+    for (int i = num_dims - 1; i >= 0; --i) { // (Mark JHY) the right_most dimension is the lowest one...
         int sh = shape[i];
         out_index[i] = cur_ord % sh;
         cur_ord /= sh;
@@ -177,6 +177,7 @@ __device__ void broadcast_index(const int* big_index, const int* big_shape, cons
     for (int i = 0; i < num_dims; ++i) {
         if (shape[i] > 1) {
             out_index[i] = big_index[i + (num_dims_big - num_dims)];
+            // See "Mark JHY", that's why here we do the alignment like this! 
         } else {
             out_index[i] = 0;
         }

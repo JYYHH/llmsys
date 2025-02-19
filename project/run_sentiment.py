@@ -15,7 +15,8 @@ if backend_name == "CudaKernelOps":
     from minitorch.cuda_kernel_ops import CudaKernelOps
     BACKEND = minitorch.TensorBackend(CudaKernelOps)
 
-BATCH = 10
+BATCH = 128
+EMBDIM = 50
 
 
 def RParam(*shape):
@@ -33,10 +34,10 @@ class Linear(minitorch.Module):
         # 2. Initialize self.bias to be a random parameter of (out_size)
         # 3. Set self.out_size to be out_size
         # HINT: make sure to use the RParam function
-    
-        raise NotImplementedError
-    
-        # END ASSIGN1_3
+        self.weights = RParam(in_size, out_size)
+        self.bias = RParam(out_size)
+        self.out_size = out_size
+        
 
     def forward(self, x):
         
@@ -49,10 +50,9 @@ class Linear(minitorch.Module):
         # 3. Apply Matrix Multiplication on input x and self.weights, and reshape the output to be of size (batch, self.out_size)
         # 4. Add self.bias
         # HINT: You can use the view function of minitorch.tensor for reshape
-
-        raise NotImplementedError
-    
-        # END ASSIGN1_3
+            # there's a broadcast without even reshape self.bias, and the reason why is in ~/src/combine.cu#L180, in function "broadcast_index()"
+            # Actually it will lead to a call on Zip function in ~/src/combine.cu
+        return x @ self.weights.value + self.bias.value
         
         
 
@@ -82,9 +82,7 @@ class Network(minitorch.Module):
         # BEGIN ASSIGN1_3
         # TODO
         # 1. Construct two linear layers: the first one is embedding_dim * hidden_dim, the second one is hidden_dim * 1
-
-        raise NotImplementedError
-        # END ASSIGN1_3
+        self.linear1, self.linear2 = Linear(embedding_dim, hidden_dim), Linear(hidden_dim, 1)
         
         
 
@@ -101,10 +99,16 @@ class Network(minitorch.Module):
         # 4. Apply the second linear layer
         # 5. Apply sigmoid and reshape to (batch)
         # HINT: You can use minitorch.dropout for dropout, and minitorch.tensor.relu for ReLU
-        
-        raise NotImplementedError
-    
-        # END ASSIGN1_3
+        batch, seq_len, emb_dim = embeddings.shape
+        mid = embeddings.mean(dim = 1).view(batch, emb_dim)
+        mid = self.linear1(mid)
+        # mid = minitorch.dropout(mid.relu(), self.dropout_prob, self.mode == "eval")
+        mid = mid.relu()
+        mid = self.linear2(mid)
+        mid = minitorch.dropout(mid, self.dropout_prob, self.mode == "eval")
+        mid = mid.sigmoid().view(batch)
+        return mid
+
 
 
 # Evaluation helper methods
@@ -156,7 +160,11 @@ class SentenceSentimentTrain:
         The trainer class of sentence sentiment classification
     '''
     def __init__(self):
-        self.model = Network()
+        self.model = Network(
+            embedding_dim = EMBDIM,
+            hidden_dim = 128,
+            dropout_prob = 0.5,
+        )
 
     def train(
         self,
@@ -181,12 +189,15 @@ class SentenceSentimentTrain:
             model.train()
             train_predictions = []
             batch_size = min(batch_size, n_training_samples)
+
             
             for batch_num, example_num in enumerate(
                 range(0, n_training_samples, batch_size)
             ):
                 out=None
-                
+                optim.zero_grad()
+                # if batch_num > 0:
+                #     continue
                 # BEGIN ASSIGN1_4
                 # TODO
                 # 1. Create x and y using minitorch.tensor function through our CudaKernelOps backend
@@ -196,15 +207,20 @@ class SentenceSentimentTrain:
                 # 5. Call backward function of the loss
                 # 6. Use Optimizer to take a gradient step
                 
-                raise NotImplementedError
-                # END ASSIGN1_4
-                
-                
+                X = minitorch.tensor(X_train[example_num: min(example_num + batch_size, n_training_samples)], backend = BACKEND, requires_grad = True)
+                y = minitorch.tensor(y_train[example_num: min(example_num + batch_size, n_training_samples)], backend = BACKEND, requires_grad = False)
+                out = model(X)
+                # print(f"y = {y}\nout = {out}")
+                # loss = -(out.log() * y + (-y + 1) * (-out + 1).log()).mean()
+                loss = -(out * y + (y - 1.0) * (out - 1.0)).log().mean()
+                loss.backward()
+                optim.step()
+
                 # Save training results
                 train_predictions += get_predictions_array(y, out)
                 total_loss += loss[0]
                 n_batches += 1
-        
+            
             # Evaluate on validation set at the end of the epoch
             validation_predictions = []
             if data_val is not None:
@@ -217,10 +233,11 @@ class SentenceSentimentTrain:
                 # 2. Get the output of the model
                 # 3. Obtain validation predictions using the get_predictions_array function, and add to the validation_predictions list
                 # 4. Obtain the validation accuracy using the get_accuracy function, and add to the validation_accuracy list
-                
-                raise NotImplementedError
-                
-                # END ASSIGN1_4
+                X = minitorch.tensor(X_val, backend = BACKEND)
+                y = minitorch.tensor(y_val, backend = BACKEND)
+                out = model(X)
+                validation_predictions.append(get_predictions_array(y, out))
+                validation_accuracy.append(get_accuracy(validation_predictions[-1]))
                 
                 model.train()
 
@@ -291,14 +308,15 @@ def encode_sentiment_data(dataset, pretrained_embeddings, N_train, N_val=0):
 
 
 if __name__ == "__main__":
-    train_size = 450
+    train_size = 450 * 4
     validation_size = 100
-    learning_rate = 0.25
+    learning_rate = 0.0002
     max_epochs = 250
-    embedding_dim = 50
+    embedding_dim = EMBDIM
+    random.seed(666)
 
     (X_train, y_train), (X_val, y_val) = encode_sentiment_data(
-        load_dataset("glue", "sst2"),
+        load_dataset("glue", "sst2", cache_dir = "./cached_dataset"),
         embeddings.GloveEmbedding("wikipedia_gigaword", d_emb=embedding_dim, show_progress=True),
         train_size,
         validation_size,

@@ -4,3 +4,4 @@ minitorch.egg-info/*
 project/__pycache__
 tests/__pycache__
 .hypothesis/
+cached_dataset/
