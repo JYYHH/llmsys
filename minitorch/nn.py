@@ -238,9 +238,7 @@ def logsumexp(input: Tensor, dim: int) -> Tensor:
         out : The output tensor with the same number of dimensions as input (equiv. to keepdims=True)
             NOTE: minitorch functions/tensor functions typically keep dimensions if you provide a dimensions.
     """  
-    ### BEGIN YOUR SOLUTION
-    raise NotImplementedError
-    ### END YOUR SOLUTION
+    return input.exp().sum(dim = dim).log()
 
 
 
@@ -250,6 +248,8 @@ def softmax_loss(logits: Tensor, target: Tensor) -> Tensor:
     """Softmax + Cross Entropy Loss function with 'reduction=None'.
     Formula is provided in writeup.
 
+
+
     Args: 
         logits : (minibatch, C) Tensor of raw logits       
         target : (minibatch, ) Tensor of true labels 
@@ -258,7 +258,5 @@ def softmax_loss(logits: Tensor, target: Tensor) -> Tensor:
         loss : (minibatch, )
     """
     result = None
-    ### BEGIN YOUR SOLUTION
-    raise NotImplementedError
-    ### END YOUR SOLUTION
-    return result.view(batch_size, )
+    batch_size, C = logits.shape
+    return (-(logits * one_hot(target, C)).sum(dim = 1) + logsumexp(logits, 1)).view(batch_size, )
