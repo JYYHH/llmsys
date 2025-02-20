@@ -156,7 +156,42 @@ __global__ void MatrixMultiplyKernel(
     const int* b_strides
 ) {
 
-    assert(false && "Not Implemented");
+  __shared__ float a_shared[TILE][TILE];
+  __shared__ float b_shared[TILE][TILE];
+
+  // In each block, we will compute a batch of the output matrix
+  // All the threads in the block will work together to compute this batch
+  int batch = blockIdx.z;
+  int a_batch_stride = a_shape[0] > 1 ? a_strides[0] : 0;
+  int b_batch_stride = b_shape[0] > 1 ? b_strides[0] : 0;
+  int out_batch_stride = out_shape[0] > 1 ? out_strides[0] : 0;
+  const int row_base = blockIdx.x * blockDim.x;
+  const int col_base = blockIdx.y * blockDim.y;
+  const int row_offset = threadIdx.x;
+  const int col_offset = threadIdx.y;
+  const int row = row_base + row_offset;
+  const int col = col_base + col_offset;
+  int col_a = col_offset;
+  int row_b = row_offset;
+  int reduce_dim = (a_shape[2] + TILE - 1) / TILE;
+  float ret = 0.0; // one element in out matrix
+
+  // walk through
+  for (int i = 0; i < reduce_dim; i++, col_a += TILE, row_b += TILE){
+    // read the block in a and b into the shared memory
+    a_shared[row_offset][col_offset] = (row < a_shape[1] && col_a < a_shape[2]) ? a_storage[batch * a_batch_stride + row * a_strides[1] + col_a * a_strides[2]] : 0.0;
+      // small trick here: we just save the transpose of the submatrix...
+    b_shared[col_offset][row_offset] = (row_b < b_shape[1] && col < b_shape[2]) ? b_storage[batch * b_batch_stride + row_b * b_strides[1] + col * b_strides[2]] : 0.0;
+    // sync all threads in this block
+    __syncthreads();
+    // then do the local reduction here
+    for (int j = 0; j < TILE; j++)
+      ret += a_shared[row_offset][j] * b_shared[col_offset][j];
+  }
+
+  // save the result
+  if (row < out_shape[1] && col < out_shape[2])
+    out[batch * out_batch_stride + row * out_strides[1]+ col * out_strides[2]] = ret;
 }
 
 
@@ -171,7 +206,20 @@ __global__ void mapKernel(
     int shape_size,
     int fn_id
 ) {
-    assert(false && "Not Implemented");
+  int out_index[MAX_DIMS];
+  int in_index[MAX_DIMS];
+  int position = blockIdx.x * blockDim.x + threadIdx.x;
+  int in_position = 0;
+
+  if (position >= out_size) // whether is out of bound
+    return;
+  // out_position to out index
+  to_index(position, out_shape, out_index, shape_size); 
+  // out index to in index, maybe need broadcast
+  broadcast_index(out_index, out_shape, in_shape, in_index, shape_size, shape_size);
+  // in index to in_position
+  in_position = index_to_position(in_index, in_strides, shape_size);
+  out[position] = fn(fn_id, in_storage[in_position]);
 }
 
 
@@ -188,7 +236,22 @@ __global__ void reduceKernel(
     int shape_size,
     int fn_id
 ) {
-    assert(false && "Not Implemented");
+  int out_index[MAX_DIMS];
+  int position = blockIdx.x * blockDim.x + threadIdx.x;
+  float result = reduce_value;
+  int reduce_dim_l = a_shape[reduce_dim];
+
+  if (position >= out_size) // whether is out of bound
+    return;
+  // out_position to out index
+  to_index(position, out_shape, out_index, shape_size);
+  // walk through
+  for (int i = 0; i < reduce_dim_l; i++){
+    out_index[reduce_dim] = i;
+    result = fn(fn_id, result, a_storage[index_to_position(out_index, a_strides, shape_size)]);
+  }
+  // save output
+  out[position] = result;
 }
 
 __global__ void zipKernel(
@@ -207,7 +270,24 @@ __global__ void zipKernel(
     int b_shape_size,
     int fn_id
 ) {
-    assert(false && "Not Implemented");
+  int out_index[MAX_DIMS];
+  int a_index[MAX_DIMS];
+  int b_index[MAX_DIMS];
+  int position = blockIdx.x * blockDim.x + threadIdx.x;
+  int a_position = 0, b_position = 0;
+
+  if (position >= out_size) // whether is out of bound
+    return;
+  // out_position to out index
+  to_index(position, out_shape, out_index, out_shape_size); 
+  // out index to in indices, maybe need broadcast
+  broadcast_index(out_index, out_shape, a_shape, a_index, out_shape_size, a_shape_size);
+  broadcast_index(out_index, out_shape, b_shape, b_index, out_shape_size, b_shape_size);
+  // in indices to in_position
+  a_position = index_to_position(a_index, a_strides, a_shape_size);
+  b_position = index_to_position(b_index, b_strides, b_shape_size);
+  // compute the operation
+  out[position] = fn(fn_id, a_storage[a_position], b_storage[b_position]);
 }
 
 

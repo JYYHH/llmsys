@@ -1,0 +1,7 @@
+minitorch/__pycache__
+minitorch/cuda_kernels/
+minitorch.egg-info/*
+project/__pycache__
+tests/__pycache__
+.hypothesis/
+cached_dataset/
