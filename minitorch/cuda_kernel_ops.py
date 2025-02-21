@@ -319,8 +319,10 @@ class CudaKernelOps(TensorOps):
         if len(b.shape) > 3:
             b = b.contiguous().view(np.prod(b.shape[:-2]), b.shape[-2], b.shape[-1])
         
-        assert a.shape[0] == b.shape[0]
-        assert a.shape[0] == out.shape[0]
+        # (JHY): some modification applied here in order to do a broadcast version Matrix Mul
+        #        the reason is that the CUDA code I write support the (batch dimension)broadcast MatMul
+        # assert a.shape[0] == b.shape[0]
+        assert a.shape[0] == out.shape[0] or b.shape[0] == out.shape[0]
 
         lib.MatrixMultiply.argtypes = [
             np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),   # out_storage
