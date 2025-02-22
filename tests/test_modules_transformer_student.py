@@ -67,7 +67,7 @@ def test_multihead_attention_student(batch_size, queries_len, n_embd, num_heads,
     np.testing.assert_allclose(layer.out_projection.weights.value.grad.to_numpy(), w_out_grad, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(layer.q_projection.weights.value.grad.to_numpy(), w_q_grad, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(layer.k_projection.weights.value.grad.to_numpy(), w_k_grad, atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose( layer.v_projection.weights.value.grad.to_numpy(), w_v_grad, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(layer.v_projection.weights.value.grad.to_numpy(), w_v_grad, atol=1e-5, rtol=1e-5)
 
 
 ################################ FFN ########################################

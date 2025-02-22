@@ -37,7 +37,13 @@ class Embedding(Module):
         self.num_embeddings = num_embeddings # Vocab size
         self.embedding_dim  = embedding_dim  # Embedding Dimension
         
-        self.weights = Parameter(tensor_from_numpy(np.random.normal(0, 1, (num_embeddings, embedding_dim))))
+        self.weights = Parameter(
+            tensor_from_numpy(
+                np.random.normal(0, 1, (num_embeddings, embedding_dim)), 
+                backend = backend, 
+                requires_grad = True
+            )
+        )
     
     def forward(self, x: Tensor):
         """Maps word indices to one-hot vectors, and projects to embedding vectors.
@@ -49,7 +55,7 @@ class Embedding(Module):
             output : Tensor of shape (batch_size, seq_len, embedding_dim)
         """
         bs, seq_len = x.shape
-        return one_hot(x, self.num_embeddings) @ self.weights.value.view(1, self.num_embeddings, self.embedding_dim)
+        return (one_hot(x, self.num_embeddings).view(bs * seq_len, self.num_embeddings) @ self.weights.value).view(bs, seq_len, self.embedding_dim)
 
     
 class Dropout(Module):
