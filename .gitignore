@@ -5,3 +5,4 @@ project/__pycache__
 tests/__pycache__
 .hypothesis/
 cached_dataset/
+workdir_vocab10000_lr0.02_embd256/

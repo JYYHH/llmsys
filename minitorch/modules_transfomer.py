@@ -259,13 +259,6 @@ class DecoderLM(Module):
         
         batch_size, seq_len = idx.shape
 
-        # Get Token Embeddings of shape (batch_size, seq_len, n_embd)
-        """
-        Create Positional Embeddings of shape (1, seq_len, n_embd)
-         - First create a tensor of position ids [0, 1, 2, ..., seq_len - 1] of shape (1, seq_len)
-         - Pass the position ids through your positional embedding layer
-         - Ensure shape is (1, seq_len, n_embd)
-        """
         position_ = tensor_from_numpy(np.arange(seq_len).reshape(1, -1), backend = self.backend) # shape(1, seq_len)
         position_embedding = self.position_embeddings(position_) # shape(1, seq_len, n_embd)
         token_embedding = self.token_embeddings(idx)             # shape(batch_size, seq_len, n_embd)
@@ -275,7 +268,3 @@ class DecoderLM(Module):
         o_ = self.dropout(o_)
         o = self.lm_head(o_.view(batch_size * seq_len, self.n_embd)).view(batch_size, seq_len, self.n_vocab)
         return o
-        # Pass through each transformer Layer
-        # Final LayerNorm
-        # Get correct shape
-        ### END SOLUTION

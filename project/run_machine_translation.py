@@ -299,8 +299,8 @@ def generate(model,
             # TODO
             # run the model with current token_ids, and predict the next token (gen_id)
             # hint: obtain the logits of next token, and take the argmax.
-            gen_id = 0
-            raise NotImplementedError("Generation Function Not Implemented Yet")
+            model_out = model(minitorch.tensor([token_ids], backend = backend))
+            gen_id = np.argmax(model_out.to_numpy()[0, -1, :]).item()
             # END ASSIGN2_2
 
             if gen_id == tokenizer.vocab[f'<eos_{tgt_key}>']:
@@ -399,23 +399,23 @@ def main(dataset_name='bbaaaa/iwslt14-de-en-preprocess',
     for epoch_idx in range(n_epochs):
         desc = f'epoch {epoch_idx} / {n_epochs}'
 
-        train(
-            model=model,
-            optimizer=optimizer,
-            examples=dataset['train'],
-            n_samples=samples_per_epoch,
-            batch_size=batch_size,
-            collate_fn=collate_fn,
-            desc=desc)
+        # train(
+        #     model=model,
+        #     optimizer=optimizer,
+        #     examples=dataset['train'],
+        #     n_samples=samples_per_epoch,
+        #     batch_size=batch_size,
+        #     collate_fn=collate_fn,
+        #     desc=desc)
 
-        validation_loss = evaluate_loss(
-            model=model,
-            examples=dataset['validation'],
-            batch_size=batch_size,
-            collate_fn=collate_fn,
-            desc=desc)
+        # validation_loss = evaluate_loss(
+        #     model=model,
+        #     examples=dataset['validation'],
+        #     batch_size=batch_size,
+        #     collate_fn=collate_fn,
+        #     desc=desc)
 
-        print(f'Epoch {epoch_idx}: Validation Loss = {validation_loss}')
+        # print(f'Epoch {epoch_idx}: Validation Loss = {validation_loss}')
 
         gen_sents = generate(
             model=model,
