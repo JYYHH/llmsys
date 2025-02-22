@@ -138,6 +138,9 @@ def backpropagate(variable: Variable, deriv: Any) -> None:
                 if not parent.is_constant():
                     if parent.is_leaf():
                         parent.accumulate_derivative(deriv_)
+                    # for the intermediate nodes who has a lot of children
+                    elif hasattr(parent, "grad") and parent.grad is not None:
+                        parent.grad = parent.grad + deriv_
                     else:
                         parent.grad = deriv_
     # END ASSIGN1_1

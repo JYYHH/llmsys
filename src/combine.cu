@@ -252,6 +252,8 @@ __global__ void MatrixMultiplyKernel(
       // then do the local reduction here
       for (int j = 0; j < TILE; j++)
         ret += a_shared[row_offset][j] * b_shared[col_offset][j];
+      // must have a sync, since next we will load sth. into the shared memory
+      __syncthreads();
     }
 
     // save the result
