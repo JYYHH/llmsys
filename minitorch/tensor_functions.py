@@ -423,12 +423,12 @@ class Attn_Softmax(Function):
         return softmax_out
 
     @staticmethod
-    def backward(ctx: Context, out_grad: Tensor) -> Tuple[Tensor, Tensor]:
+    def backward(ctx: Context, out_grad: Tensor) -> Tuple[Tensor, float]:
         softmax_out = ctx.saved_values[0]
         # print(softmax_out.shape, out_grad.shape)
         ret = softmax_out.f.attn_softmax_bw(out_grad, softmax_out)
         # print(ret.shape)
-        return ret, ret
+        return ret, 0.0
 
 
 class LayerNorm(Function):
