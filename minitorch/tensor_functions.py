@@ -418,15 +418,17 @@ class MatMul(Function):
 class Attn_Softmax(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, mask: Tensor) -> Tensor:
-      #   BEGIN ASSIGN3_1 
-      raise NotImplementedError("Need to implement for Assignment 3")
-      #   END ASSIGN3_1
+        softmax_out = inp.f.attn_softmax_fw(inp, mask)
+        ctx.save_for_backward(softmax_out)
+        return softmax_out
 
     @staticmethod
-    def backward(ctx: Context, out_grad: Tensor) -> Tensor:
-      #   BEGIN ASSIGN3_1 
-      raise NotImplementedError("Need to implement for Assignment 3")
-      #   END ASSIGN3_1
+    def backward(ctx: Context, out_grad: Tensor) -> Tuple[Tensor, Tensor]:
+        softmax_out = ctx.saved_values[0]
+        # print(softmax_out.shape, out_grad.shape)
+        ret = softmax_out.f.attn_softmax_bw(out_grad, softmax_out)
+        # print(ret.shape)
+        return ret, ret
 
 
 class LayerNorm(Function):

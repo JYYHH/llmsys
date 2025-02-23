@@ -399,6 +399,8 @@ class Tensor:
 
         x = h.last_fn._backward(h.ctx, d_output)
         assert len(x) == len(h.inputs), f"Bug in function {h.last_fn}"
+        # if len(x) < len(h.inputs):
+        #     h.inputs = h.inputs[:-1]
         return [
             (inp, inp.expand(self._ensure_tensor(d_in)))
             for inp, d_in in zip(h.inputs, x)

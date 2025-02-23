@@ -124,7 +124,40 @@ __global__ void ker_attn_softmax_lt32(T *inp, const T *attn_mask, int from_len,
 template <typename T, int block_dim, int ele_per_thread>
 __global__ void ker_attn_softmax(T *inp, const T *attn_mask, int from_len,
                                  int to_len, bool mask_future) {
-  
+/*
+                                  gridDim.x = dynamic
+                                  gridDim.y = batch_size
+                                  gridDim.z = head_num
+
+                                  blockDim.x = block_dim
+                                    token_per_reduce (on row dimension)
+                                    ele_per_thread   (on col dimension)
+                                  
+    We want to compute the softmax for (batch_size * head_num) matrices of shape (from_len, to_len)
+    And the computation for each matrix is independent, it's also why we can put (batch_size, head_num) as (gridDim.y, gridDim.z)
+
+    Note 1:
+        The softmax computation of each row is also independent, thus we add another fully parallel dimension (dynamic, ) as (gridDim.x, )
+        And Thus, each block id (x, y, z) is responsible to compute the softmax for:
+                                  batch_id == y
+                                  head_id  == z
+                                  row_id   == [x::gridDim.x]   (x, x + gridDim.x, ..., <num_of_rows>)
+        In this setting, no communication is need among different blocks
+
+    Note 2:
+        As for the computation logic inside a block,
+        each thread (id_th) is responsible to compute the columns col[id_th * ele_per_thread: (id_th + 1) * ele_per_thread]
+        In cases the to_len is small (<=32, and <=64 we can make one thread for 2 elements thus still 32 threads), we have <= 32 threads in a block, 
+            thus can directly use warp_level reduce
+        Other cases, to_len is huge, we can utilize the 'blockReuce' provided by CUDA 
+            (actually inside it, there's first a in-warp local reduction for each warp, and then a "global" reduction to combine the results from different warps)
+
+    Note 3: ?
+        How about keeping accelerating the kernel?
+        Since we can fuse the operations 
+          (e.g., combining reduce_max, reduce_sum and element_wise division, 
+          this needs us to write a special REUDCTION kernel for CUDA)
+*/
   int batch_id = blockIdx.y;
   int head_id = blockIdx.z;
   const int nhead = gridDim.z;
@@ -155,9 +188,25 @@ __global__ void ker_attn_softmax(T *inp, const T *attn_mask, int from_len,
 
     /* step 1. compute max */
     // thread local max
-    // BEGIN ASSIGN3_1
-    
-    // END ASSIGN3_1
+    float val[token_per_reduce][ele_per_thread];
+    float l_max[token_per_reduce];
+    for (int i = 0; i < token_per_reduce; i++) {
+      l_max[i] = REDUCE_FLOAT_INF_NEG;
+      for (int j = 0; j < ele_per_thread; j++) {
+        float temp_val;
+        if (mask_future && ele_per_thread * threadIdx.x + j > token_id + i) {
+          temp_val = REDUCE_FLOAT_INF_NEG;
+        } else {
+          temp_val = (float)inp_val[i][j];
+          if (attn_mask) {
+            temp_val += (float)mval[j];
+          }
+        }
+        val[i][j] = temp_val;
+        l_max[i] = fmaxf(l_max[i], temp_val);
+      }
+    }
+
     // block reduce max
     blockReduce<ReduceType::kMax, token_per_reduce>(l_max);
     // write shared
@@ -171,9 +220,15 @@ __global__ void ker_attn_softmax(T *inp, const T *attn_mask, int from_len,
 
     /* step 2. compute sum */
     // thread local sum
-    // BEGIN ASSIGN3_1
-    
-    // END ASSIGN3_1
+    float l_sum[token_per_reduce];
+    for (int i = 0; i < token_per_reduce; i++) {
+      l_sum[i] = 0.f;
+      for (int j = 0; j < ele_per_thread; j++) {
+        val[i][j] = __expf(val[i][j] - s_max[i]);
+        l_sum[i] += val[i][j];
+      }
+    }
+
     // block reduce sum
     blockReduce<ReduceType::kSum, token_per_reduce>(l_sum);
     // write shared
@@ -186,9 +241,13 @@ __global__ void ker_attn_softmax(T *inp, const T *attn_mask, int from_len,
     __syncthreads();
 
     /* step 3. compute final result */
-    // BEGIN ASSIGN3_1
-   
-    // END ASSIGN3_1
+    for (int i = 0; i < token_per_reduce && (token_id + i) < from_len; i++) {
+      for (int j = 0; j < ele_per_thread; j++) {
+        inp_val[i][j] = (T)(val[i][j] * s_sum[i]);
+      }
+      BlockStore(ts_store).Store(inp + (token_id + i) * to_len, inp_val[i],
+                                 to_len);
+    }
   }  // blockIdx.x
 }
 
@@ -267,17 +326,28 @@ Softmax backward in self attention.
 
 @thread
 gridDim.x = batch_size * nhead * seq_len / warps_per_block
+  each block will handle "warps_per_block" rows 
 blockDim.x = WARP_SIZE
+  threadIdx.x is the offset in a WARP
 blockDim.y = warps_per_block
+  threadIdx.y is a specifc row (in a block) to handle,
+  thus "blockIdx.x * blockDim.y + threadIdx.y" is the specific row (globally) to deal with
+
+ITERATIONS = ceil(softmax_length / WARP_SIZE)
 
 @param
 grad: [batch_size, nhead, seq_len, seq_len], output grad.
 output: [batch_size, nhead, seq_len, seq_len], output of softmax forward.
 */
 template <typename T, int ITERATIONS>
+/*
+  softmax_length = seq_len
+  inp            = <soft_max_output>
+  grad           = <grad_on_soft_max_output>
+*/
 __global__ void ker_attn_softmax_bw(T *grad, const T *inp, int softmax_length) {
-  int batch_idx = blockIdx.x * blockDim.y + threadIdx.y;
-  int offset = batch_idx * softmax_length + threadIdx.x;
+  int batch_idx = blockIdx.x * blockDim.y + threadIdx.y;  // row
+  int offset = batch_idx * softmax_length + threadIdx.x;  // offset in col
 
   grad += offset;
   inp += offset;
@@ -306,32 +376,76 @@ __global__ void ker_attn_softmax_bw(T *grad, const T *inp, int softmax_length) {
     int curr_idx = threadIdx.x + i * WARP_SIZE;
     if (curr_idx < softmax_length)
       grad[i * WARP_SIZE] = (T)((float)inp_reg[i] * ((float)grad_reg[i] - sum));
+    // in-place peration
   }
 }
 
 // template <typename T>
 extern "C" {
 void launch_attn_softmax_bw(float *out_grad,
-                                const float *soft_inp, int rows,
+                                const float *soft_inp, int rows, // "rows" is the total rows?
                                 int softmax_len,
                                 cudaStream_t stream) {
   
   const int warps_per_block = 4;
   dim3 grid_dim((rows + warps_per_block - 1) / warps_per_block);
   dim3 block_dim(WARP_SIZE, warps_per_block);
-  // BEGIN ASSIGN3_1
   
   
-  // Launch kernel
-  // Hint: use ker_attn_softmax_bw<float, ITERATIONS> depending on softmax_len
-  
+  float *d_out_grad, *d_soft_inp;
+  int array_size = sizeof(float) * rows * softmax_len;
+  // const int Iter_num = (softmax_len + WARP_SIZE - 1) / WARP_SIZE;
+  cudaMalloc((void **)&d_out_grad, array_size);
+  cudaMalloc((void **)&d_soft_inp, array_size);
+  cudaMemcpy(d_out_grad, out_grad, array_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_soft_inp, soft_inp, array_size, cudaMemcpyHostToDevice);
+
+  if (softmax_len <= 32) {
+    ker_attn_softmax_bw<float, 1><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 64) {
+    ker_attn_softmax_bw<float, 2><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 128) {
+    ker_attn_softmax_bw<float, 4><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 256) {
+    ker_attn_softmax_bw<float, 8><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 384) {
+    ker_attn_softmax_bw<float, 12><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 512) {
+    ker_attn_softmax_bw<float, 16><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 768) {
+    ker_attn_softmax_bw<float, 24><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 1024) {
+    ker_attn_softmax_bw<float, 32><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else if (softmax_len <= 2048) {
+    ker_attn_softmax_bw<float, 64><<<grid_dim, block_dim>>>(
+      d_out_grad, d_soft_inp, softmax_len);
+  } else {
+    throw std::runtime_error(
+        "Sequence length greater than 512 is currently not supported");
+  }
+
   // Copy back to the host
-  
-  
+  cudaMemcpy(out_grad, d_out_grad, array_size, cudaMemcpyDeviceToHost);
+  cudaDeviceSynchronize();
+
+  // Check CUDA execution
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    fprintf(stderr, "launch_attn_softmax Error: %s\n", cudaGetErrorString(err));
+    exit(EXIT_FAILURE);
+  }
 
   // Free memory on device
-  // END ASSIGN3_1
-
+  cudaFree(d_out_grad);
+  cudaFree(d_soft_inp);
 }}
 
 }  
