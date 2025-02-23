@@ -141,8 +141,8 @@ class PowerScalar(Function):
             output : Tensor
                 Tensor containing the result of raising every element of a to scalar.
         """
-        # COPY FROM ASSIGN2_1
-        raise NotImplementedError
+        ctx.save_for_backward(a, scalar)
+        return a.f.pow_scalar_zip(a, scalar)
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, float]:
@@ -164,10 +164,7 @@ class PowerScalar(Function):
                 gradient_for_a must be the correct gradient, but just return 0.0 for the gradient of scalar.
         """
         a, scalar = ctx.saved_values
-        grad_a    = None
-        
-        # COPY FROM ASSIGN2_1
-        raise NotImplementedError
+        grad_a    = a.f.mul_zip(a.f.pow_scalar_zip(a, scalar - 1), a.f.mul_zip(grad_output, scalar))
 
         return (grad_a, 0.0)
 
@@ -190,8 +187,8 @@ class Tanh(Function):
             output : Tensor
                 Tensor containing the element-wise tanh of a.
         """
-        # COPY FROM ASSIGN2_1
-        raise NotImplementedError
+        ctx.save_for_backward(a)
+        return a.f.tanh_map(a)
     
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tensor:
@@ -209,8 +206,10 @@ class Tanh(Function):
             output : Tensor
                 gradient_for_a must be the correct element-wise gradient for tanh.
         """
-        # COPY FROM ASSIGN2_1
-        raise NotImplementedError
+        # tanh'(a) = 1 / (cosh(a)^2) = (\frac{1 - tanh(a/2)^2}{1 + tanh(a/2)^2}) ^ 2
+        a = ctx.saved_values[0]
+        tanh_mid = a.f.tanh_map(a * 0.5) ** 2
+        return ((-tanh_mid + 1) / (1 + tanh_mid)) ** 2
 
 
 class Sigmoid(Function):
@@ -434,10 +433,9 @@ class Attn_Softmax(Function):
 class LayerNorm(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, gamma: Tensor, beta: Tensor) -> Tensor:
-      #   BEGIN ASSIGN3_2 
-      raise NotImplementedError("Need to implement for Assignment 3")
-      #   END ASSIGN3_2
-
+      ln_res, vars_, means_ = inp.f.layernorm_fw(inp, gamma, beta)
+      ctx.save_for_backward(ln_res, vars_, means_)
+      return ln_res
     @staticmethod
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN3_2

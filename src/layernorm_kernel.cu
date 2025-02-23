@@ -33,6 +33,23 @@ inp: [batch_size * seq_len, hidden_size], ln input.
 scale: [hidden_size], ln scale
 bias: [hidden_size], ln bias
 */
+
+/*
+  (JHY): helper functions
+*/
+__device__ float4 operator+(float4 a, float4 b) {
+  return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
+}
+__device__ float4 operator*(float4 a, float4 b) {
+  return make_float4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
+}
+__device__ float4 operator*(float4 a, float scalar) {
+  return make_float4(a.x * scalar, a.y * scalar, a.z * scalar, a.w * scalar);
+}
+__device__ float4 operator-(float4 a, float subtr) {
+  return make_float4(a.x - subtr, a.y - subtr, a.z - subtr, a.w - subtr);
+}
+
 template <typename T>
 __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
                                const T *scale, const T *bias, int hidden_size) {
@@ -45,19 +62,33 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   // 3. Compute layernorm result with reinterpret_cast by casting to float4 for speedup
   
   // Step 1
-  float l_sum = 0;
+  float l_sum[2] = {0.0, 0.0};
   const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;  
   for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
     float4 val = inp_f4[idx];
-    l_sum += val.x + val.y + val.z + val.w;
+    l_sum[0] += val.x + val.y + val.z + val.w;
+    l_sum[1] += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
   }
 
   // Step 2
+  blockReduce<ReduceType::kSum, 2>(l_sum);
+  float mean_ = l_sum[0] / (hidden_size * 4.0);
+  float var_ = l_sum[1] / (hidden_size * 4.0) - mean_ * mean_;
+  float mul_fac = __fdividef(1.0f, __fsqrt_rn(var_ + LN_EPSILON));
+
+  if (threadIdx.x == 0){
+    // write to means and vars array
+    *(vars + blockIdx.x) = var_;
+    *(means + blockIdx.x) = mean_;
+  }
 
   // Step 3
-  
-  assert(false && "Not Implemented");
-  /// END ASSIGN3_2
+  float4 *ln_res_f4 = reinterpret_cast<float4 *>(ln_res) + blockIdx.x * hidden_size;
+  const float4 *scale_f4 = reinterpret_cast<const float4 *>(scale);
+  const float4 *bias_f4 = reinterpret_cast<const float4 *>(bias);
+  for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
+    ln_res_f4[idx] = scale_f4[idx] * ((inp_f4[idx] - mean_) * mul_fac) + bias_f4[idx];
+  }
 }
 
 extern "C" {
@@ -90,7 +121,7 @@ void launch_layernorm(float *ln_res, float *vars, float *means,
   cudaMemcpy(d_bias, bias, bias_size, cudaMemcpyHostToDevice);
 
   // For using float4
-  hidden_dim >>= 2;
+  hidden_dim >>= 2; // thus we can group 4 adjacent elements together in hidden_dim
   int nthread = min(((hidden_dim + 31) / 32) * 32, MAX_THREADS);
   dim3 grid_dim(batch_size);
   dim3 block_dim(nthread);
