@@ -426,6 +426,27 @@ class CudaKernelOps(TensorOps):
         stream
       ) 
 
+    #   lib_softmax.launch_attn_softmax_bw_JHY.argtypes = [
+    #     np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+    #     np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+    #     ctypes.c_int,
+    #     ctypes.c_int,
+    #     ctypes.c_int,
+    #     ctypes.c_int,
+    #     ctypes.c_void_p
+    #   ]
+    #   lib_softmax.launch_attn_softmax_bw_JHY.restype = None
+
+    #   lib_softmax.launch_attn_softmax_bw_JHY(
+    #     out_grad._tensor._storage,
+    #     soft_inp._tensor._storage,
+    #     batch_size,
+    #     nhead,
+    #     from_len,
+    #     to_len,
+    #     stream
+    #   ) 
+
       return out_grad
 
     @staticmethod

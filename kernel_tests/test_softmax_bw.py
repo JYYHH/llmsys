@@ -11,6 +11,8 @@ from minitorch.cuda_kernel_ops import CudaKernelOps
 backend = minitorch.TensorBackend(CudaKernelOps)
 
 
+# custom_count, baseline_count = 0, 0
+
 @kt.case(atol=1e-2, rtol=1e-3, ntest=5)
 def test_launch_attn_softmax_bw():
   nhead = kt.nhead
@@ -35,6 +37,11 @@ def test_launch_attn_softmax_bw():
     soft_inp_mt.backward(out_grad_mt)
     end_time = time.time()
 
+    # global custom_count
+    # custom_count += 1
+    # if custom_count == 1:
+    #   print(f"custom matrix = {inp_mt.grad.to_numpy()[0, 0, 47, 256: 282]}")
+
     inp_grad = torch.tensor(inp_mt.grad.to_numpy(), dtype=torch.float32).cuda()
     return [
         inp_grad,
@@ -50,6 +57,11 @@ def test_launch_attn_softmax_bw():
     tsum = tsum.sum(dim=3).view(tsum.shape[0], tsum.shape[1], tsum.shape[2], 1)
     res = soft_inp_mt * (out_grad_mt - tsum)
     end_time = time.time()
+
+    # global baseline_count
+    # baseline_count += 1
+    # if baseline_count == 1:
+    #   print(f"baseline matrix = {torch.tensor(res._tensor._storage).numpy().reshape(1, 8, 115, 282)[0, 0, 47, 256: 282]}")
 
     res = torch.tensor(res._tensor._storage).float().cuda()
     return kt.norm_res_list(res), end_time - start_time

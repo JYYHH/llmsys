@@ -401,31 +401,31 @@ void launch_attn_softmax_bw(float *out_grad,
   cudaMemcpy(d_soft_inp, soft_inp, array_size, cudaMemcpyHostToDevice);
 
   if (softmax_len <= 32) {
-    ker_attn_softmax_bw<float, 1><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 1><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 64) {
-    ker_attn_softmax_bw<float, 2><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 2><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 128) {
-    ker_attn_softmax_bw<float, 4><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 4><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 256) {
-    ker_attn_softmax_bw<float, 8><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 8><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 384) {
-    ker_attn_softmax_bw<float, 12><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 12><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 512) {
-    ker_attn_softmax_bw<float, 16><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 16><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 768) {
-    ker_attn_softmax_bw<float, 24><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 24><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 1024) {
-    ker_attn_softmax_bw<float, 32><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 32><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else if (softmax_len <= 2048) {
-    ker_attn_softmax_bw<float, 64><<<grid_dim, block_dim>>>(
+    ker_attn_softmax_bw<float, 64><<<grid_dim, block_dim, 0, stream>>>(
       d_out_grad, d_soft_inp, softmax_len);
   } else {
     throw std::runtime_error(
@@ -443,6 +443,133 @@ void launch_attn_softmax_bw(float *out_grad,
     exit(EXIT_FAILURE);
   }
 
+  // Free memory on device
+  cudaFree(d_out_grad);
+  cudaFree(d_soft_inp);
+}}
+
+/*
+  JHY: my kernel for backward pass
+  grid_dim = (dynamic, batch_size, head_num)
+  block_dim = <to_len // ele_per_thread>
+*/
+template <typename T, int block_dim, int ele_per_thread>
+__global__ void ker_attn_softmax_bw_JHY(T *grad, T *inp, int from_len, int to_len) {
+
+  int batch_id = blockIdx.y;
+  int head_id = blockIdx.z;
+  const int nhead = gridDim.z;
+  typedef cub::BlockLoad<T, block_dim, ele_per_thread,
+                         cub::BLOCK_LOAD_VECTORIZE>
+      BlockLoad;
+  __shared__ typename BlockLoad::TempStorage ts_load;
+  typedef cub::BlockStore<T, block_dim, ele_per_thread,
+                          cub::BLOCK_STORE_VECTORIZE>
+      BlockStore;
+  __shared__ typename BlockStore::TempStorage ts_store;
+
+  inp += flat_3dim(batch_id, head_id, 0, nhead, from_len * to_len);
+  grad += flat_3dim(batch_id, head_id, 0, nhead, from_len * to_len);
+  for (int token_id = blockIdx.x; token_id < from_len;
+       token_id += gridDim.x) {
+    T grad_local[ele_per_thread];
+    T inp_local[ele_per_thread];
+    T local_sum = 0.0f;
+    __shared__ T s_sum;
+    // load array
+    BlockLoad(ts_load).Load(grad + token_id * to_len, grad_local, to_len, 0.0f);
+    BlockLoad(ts_load).Load(inp + token_id * to_len, inp_local, to_len, 0.0f);
+
+    // step 1. multiply and sum-up
+    for (int j = 0; j < ele_per_thread && threadIdx.x * ele_per_thread + j < to_len; j++)
+      local_sum += grad_local[j] * inp_local[j];
+
+    // step 2. reduce the sum
+    blockReduce<ReduceType::kSum, 1>(&local_sum);
+    if (threadIdx.x == 0)
+      s_sum = local_sum; // write shared
+    __syncthreads();
+
+    // step 3. compute final result
+    for (int j = 0; j < ele_per_thread; j++)
+      grad_local[j] = inp_local[j] * (grad_local[j] - s_sum);
+    BlockStore(ts_store).Store(grad + token_id * to_len, grad_local, to_len);
+  }
+}
+
+
+extern "C" {
+  void launch_attn_softmax_bw_JHY(float *out_grad,
+                                  const float *soft_inp, 
+                                  int batch_size, 
+                                  int nhead, 
+                                  int from_len,
+                                  int to_len,
+                                  cudaStream_t stream) {
+    
+  int float_size = sizeof(float);
+  int size_ = batch_size * nhead * from_len * to_len * float_size;
+
+  float *d_out_grad, *d_soft_inp;
+  cudaMalloc((void **)&d_out_grad, size_);
+  cudaMalloc((void **)&d_soft_inp, size_);
+  cudaMemcpy(d_out_grad, out_grad, size_, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_soft_inp, soft_inp, size_, cudaMemcpyHostToDevice);
+
+  dim3 grid_dim(1, batch_size, nhead);
+  const int warps_per_block = 4;
+  const int rows = batch_size * nhead * from_len;
+  dim3 grid_dim_small((rows + warps_per_block - 1) / warps_per_block);
+  dim3 block_dim_small(WARP_SIZE, warps_per_block);
+  if (to_len <= 32) {
+    ker_attn_softmax_bw<float, 1><<<grid_dim_small, block_dim_small>>>(
+      d_out_grad, d_soft_inp, to_len);
+  } else if (to_len <= 64) {
+    ker_attn_softmax_bw<float, 2><<<grid_dim_small, block_dim_small>>>(
+      d_out_grad, d_soft_inp, to_len);
+  } else if (to_len <= 128) {
+    grid_dim.x = 16;
+    ker_attn_softmax_bw_JHY<float, 64, 2><<<grid_dim, 64, 0, stream>>>(
+      d_out_grad, d_soft_inp, from_len, to_len);
+  } else if (to_len <= 256) {
+    grid_dim.x = 32;
+    ker_attn_softmax_bw_JHY<float, 128, 2><<<grid_dim, 128, 0, stream>>>(
+      d_out_grad, d_soft_inp, from_len, to_len);
+  } else if (to_len <= 384) {
+    grid_dim.x = 48;
+    ker_attn_softmax_bw_JHY<float, 192, 2><<<grid_dim, 192, 0, stream>>>(
+      d_out_grad, d_soft_inp, from_len, to_len);
+  } else if (to_len <= 512) {
+    grid_dim.x = 64;
+    ker_attn_softmax_bw_JHY<float, 256, 2><<<grid_dim, 256, 0, stream>>>(
+      d_out_grad, d_soft_inp, from_len, to_len);
+  } else if (to_len <= 768) {
+    grid_dim.x = 96;
+    ker_attn_softmax_bw_JHY<float, 384, 2><<<grid_dim, 384, 0, stream>>>(
+      d_out_grad, d_soft_inp, from_len, to_len);
+  } else if (to_len <= 1024) {
+    grid_dim.x = 128;
+    ker_attn_softmax_bw_JHY<float, 512, 2><<<grid_dim, 512, 0, stream>>>(
+      d_out_grad, d_soft_inp, from_len, to_len);
+  } else if (to_len <= 2048) {
+    grid_dim.x = 256;
+    ker_attn_softmax_bw_JHY<float, 1024, 2><<<grid_dim, 1024, 0, stream>>>(
+      d_out_grad, d_soft_inp, from_len, to_len);
+  } else {
+    throw std::runtime_error(
+        "Sequence length greater than 512 is currently not supported");
+  }
+
+  // Copy back to the host
+  cudaMemcpy(out_grad, d_out_grad, size_, cudaMemcpyDeviceToHost);
+  cudaDeviceSynchronize();
+
+  // Check CUDA execution
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    fprintf(stderr, "launch_attn_softmax Error: %s\n", cudaGetErrorString(err));
+    exit(EXIT_FAILURE);
+  }
   // Free memory on device
   cudaFree(d_out_grad);
   cudaFree(d_soft_inp);
