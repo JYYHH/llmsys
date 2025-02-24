@@ -434,12 +434,12 @@ class LayerNorm(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, gamma: Tensor, beta: Tensor) -> Tensor:
       ln_res, vars_, means_ = inp.f.layernorm_fw(inp, gamma, beta)
-      ctx.save_for_backward(inp, vars_, means_, gamma, beta)
+      ctx.save_for_backward(inp, vars_, means_, gamma)
       return ln_res
     @staticmethod
     def backward(ctx: Context, out_grad: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-      inp, vars_, means_, gamma, beta = ctx.saved_values
-      return out_grad.f.layernorm_bw(out_grad, inp, gamma, beta, vars_, means_)
+      inp, vars_, means_, gamma = ctx.saved_values
+      return out_grad.f.layernorm_bw(out_grad, inp, gamma, vars_, means_)
 
 
 # Helpers for Constructing tensors

@@ -310,10 +310,9 @@ vars: [batch_size * seq_len], variance of ln forward,
 means: [batch_size * seq_len], mean of ln forward,
   used to compute xhat, maybe nullptr
 */
-// TODO(JHY): optimize, cancel betta for all backward...
 template <typename T>
 __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
-                               const T *gamma, const T *betta, const T *vars,
+                               const T *gamma, const T *vars,
                                const T *means, int hidden_size) {
   
   /// BEGIN ASSIGN3_2
@@ -378,12 +377,12 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
 extern "C" {
 void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
                          const float *out_grad, const float *inp, const float *gamma,
-                         const float *betta, const float *vars,
+                         const float *vars,
                          const float *means, int batch_size, int hidden_dim,
                          cudaStream_t stream_1, cudaStream_t stream_2) {
   
   // Allocate device memory
-  float *d_gamma_grad, *d_betta_grad, *d_inp_grad, *d_out_grad, *d_inp, *d_gamma, *d_betta, *d_vars, *d_means;
+  float *d_gamma_grad, *d_betta_grad, *d_inp_grad, *d_out_grad, *d_inp, *d_gamma, *d_vars, *d_means;
   int grad_output_size = batch_size * hidden_dim * sizeof(float);
   int gamma_betta_size = hidden_dim * sizeof(float);
   int vars_means_size = batch_size * sizeof(float);
@@ -394,7 +393,6 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   cudaMalloc((void **)&d_out_grad, grad_output_size);
   cudaMalloc((void **)&d_inp, grad_output_size);
   cudaMalloc((void **)&d_gamma, gamma_betta_size);
-  cudaMalloc((void **)&d_betta, gamma_betta_size);
   cudaMalloc((void **)&d_vars, vars_means_size);
   cudaMalloc((void **)&d_means, vars_means_size);
 
@@ -402,7 +400,6 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   cudaMemcpy((void *)d_out_grad, out_grad, grad_output_size, cudaMemcpyHostToDevice);
   cudaMemcpy((void *)d_inp, inp, grad_output_size, cudaMemcpyHostToDevice);
   cudaMemcpy((void *)d_gamma, gamma, gamma_betta_size, cudaMemcpyHostToDevice);
-  cudaMemcpy((void *)d_betta, betta, gamma_betta_size, cudaMemcpyHostToDevice);
   cudaMemcpy((void *)d_vars, vars, vars_means_size, cudaMemcpyHostToDevice);
   cudaMemcpy((void *)d_means, means, vars_means_size, cudaMemcpyHostToDevice);
 
@@ -429,7 +426,7 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   hidden_dim >>= 2;
   int nthread = min(((hidden_dim + 31) / 32) * 32, MAX_THREADS);
   ker_ln_bw_dinp<<<batch_size, nthread, 0, stream_2>>>(
-      d_inp_grad, d_out_grad, d_inp, d_gamma, d_betta, d_vars, d_means, hidden_dim);
+      d_inp_grad, d_out_grad, d_inp, d_gamma, d_vars, d_means, hidden_dim);
 
   // Synchronize and check for errors
   cudaDeviceSynchronize();
@@ -451,7 +448,6 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   cudaFree((void *)d_out_grad);
   cudaFree((void *)d_inp);
   cudaFree((void *)d_gamma);
-  cudaFree((void *)d_betta);
   cudaFree((void *)d_vars);
   cudaFree((void *)d_means);
 }}

@@ -483,14 +483,13 @@ class CudaKernelOps(TensorOps):
       return ln_res, vars_, means_
       
     @staticmethod
-    def layernorm_bw(out_grad: Tensor, inp: Tensor, gamma: Tensor, beta: Tensor, var: Tensor, mean: Tensor):
+    def layernorm_bw(out_grad: Tensor, inp: Tensor, gamma: Tensor, var: Tensor, mean: Tensor):
       batch_size, hidden_dim = inp.shape
       stream1 = torch.cuda.current_stream().cuda_stream
       stream2 = torch.cuda.Stream()
       gamma_grad, betta_grad, input_grad = inp.zeros((hidden_dim, )), inp.zeros((hidden_dim, )), inp.zeros(inp.shape)
 
       lib_layernorm.launch_layernorm_bw.argtypes = [
-        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
@@ -513,7 +512,6 @@ class CudaKernelOps(TensorOps):
         out_grad._tensor._storage,
         inp._tensor._storage,
         gamma._tensor._storage,
-        beta._tensor._storage,
         var._tensor._storage,
         mean._tensor._storage,
         batch_size,
