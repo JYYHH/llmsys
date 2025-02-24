@@ -11,6 +11,7 @@ namespace cuda {
 
 const float LN_EPSILON = 1e-8f;
 #define TILE_DIM 32
+// MAX_THREADS = 1024 for my machine
 
 
 /**
@@ -73,6 +74,9 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   
   // Step 1
   float l_sum[2] = {0.0, 0.0};
+  __shared__ float s_sum[2];
+  float mean_, var_, mul_fac;
+
   const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;  
   for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
     float4 val = inp_f4[idx];
@@ -82,9 +86,21 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
 
   // Step 2
   blockReduce<ReduceType::kSum, 2>(l_sum);
-  float mean_ = l_sum[0] / (hidden_size * 4.0);
-  float var_ = l_sum[1] / (hidden_size * 4.0) - mean_ * mean_;
-  float mul_fac = __fdividef(1.0f, __fsqrt_rn(var_ + LN_EPSILON));
+  if (hidden_size > 32){
+    if (threadIdx.x == 0){
+      s_sum[0] = l_sum[0];
+      s_sum[1] = l_sum[1];
+    }
+    __syncthreads();
+    mean_ = s_sum[0] / (hidden_size * 4.0);
+    var_ = s_sum[1] / (hidden_size * 4.0) - mean_ * mean_;
+    mul_fac = __fdividef(1.0f, __fsqrt_rn(var_ + LN_EPSILON));
+  }
+  else{
+    mean_ = l_sum[0] / (hidden_size * 4.0);
+    var_ = l_sum[1] / (hidden_size * 4.0) - mean_ * mean_;
+    mul_fac = __fdividef(1.0f, __fsqrt_rn(var_ + LN_EPSILON));
+  }
 
   if (threadIdx.x == 0){
     // write to means and vars array
@@ -340,6 +356,7 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
 
   // Step 2.1: Walk through the region this thread for, do a local reduce
   float l_sum[2] = {0.0, 0.0};
+  __shared__ float s_sum[2];
   for (uint idx = col_base; idx < hidden_size; idx += blockDim.x) {
     float4 g_o_mul_gamma = out_grad_f4[idx] * gamma_f4[idx];
     l_sum[0] += sum_reduce(g_o_mul_gamma);
@@ -349,6 +366,15 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // Step 2.2: Block Reduce
   blockReduce<ReduceType::kSum, 2>(l_sum);
 
+  if (hidden_size > 32){
+    if (threadIdx.x == 0){
+      s_sum[0] = l_sum[0];
+      s_sum[1] = l_sum[1];
+    }
+    __syncthreads();
+    l_sum[0] = s_sum[0];
+    l_sum[1] = s_sum[1];
+  }
 
   // Step 3: Write back result
   for (uint idx = col_base; idx < hidden_size; idx += blockDim.x) {
