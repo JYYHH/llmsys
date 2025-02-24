@@ -40,15 +40,25 @@ bias: [hidden_size], ln bias
 __device__ float4 operator+(float4 a, float4 b) {
   return make_float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
 }
+__device__ float4 operator-(float4 a, float4 b) {
+  return make_float4(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w);
+}
 __device__ float4 operator*(float4 a, float4 b) {
   return make_float4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
 }
 __device__ float4 operator*(float4 a, float scalar) {
   return make_float4(a.x * scalar, a.y * scalar, a.z * scalar, a.w * scalar);
 }
+__device__ float4 operator+(float4 a, float addition) {
+  return make_float4(a.x + addition, a.y + addition, a.z + addition, a.w + addition);
+}
 __device__ float4 operator-(float4 a, float subtr) {
   return make_float4(a.x - subtr, a.y - subtr, a.z - subtr, a.w - subtr);
 }
+__device__ float  sum_reduce(float4 a){
+  return a.x + a.y + a.z + a.w;
+}
+
 
 template <typename T>
 __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
@@ -186,8 +196,7 @@ means: [batch_size * seq_len], mean of ln forward,
 template <typename T>
 __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
                                         const T *out_grad,
-                                        const T *inp, const T *gamma,
-                                        const T *betta, const T *vars,
+                                        const T *inp, const T *vars,
                                         const T *means, int rows, int width) {
 
   /// BEGIN ASSIGN3_2
@@ -199,21 +208,76 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
   // 4. Assign the final result to the correct position in the global output
 
   __shared__ float betta_buffer[TILE_DIM][TILE_DIM];
+  __shared__ float vars_local[TILE_DIM];
   __shared__ float gamma_buffer[TILE_DIM][TILE_DIM];
+  __shared__ float means_local[TILE_DIM];
+  __shared__ float betta_grad_[TILE_DIM];
+  __shared__ float gamma_grad_[TILE_DIM];
+  const int        row_roof = (rows + TILE_DIM - 1) / TILE_DIM * TILE_DIM;
 
   cg::thread_block b = cg::this_thread_block();
   cg::thread_block_tile<TILE_DIM> g = cg::tiled_partition<TILE_DIM>(b);
 
-  // Step 1
-
-  // Step 2
+  const int col_off = threadIdx.y;
+  const int row_off = threadIdx.x;
+  const int col = blockIdx.x * blockDim.x + col_off;
   
-  // Step 3
-  
-  // Step 4
+  // initialize the result array
+  if (row_off == 0){
+    betta_grad_[col_off] = gamma_grad_[col_off] = 0.0;
+  }
 
-  assert(false && "Not Implemented");
-  /// END ASSIGN3_2
+  // add across the row_axis
+  for(int row = row_off; row < row_roof; row += blockDim.y){
+    float betta_grad__ = 0.0, gamma_grad__ = 0.0;
+    // first load global array into shared memory
+    if (row < rows){
+      if (col_off == 0){
+        vars_local[row_off] = vars[row];
+        means_local[row_off] = means[row];
+      }
+      betta_buffer[row_off][col_off] = out_grad[row * width + col];
+      gamma_buffer[row_off][col_off] = inp[row * width + col];
+    }
+    else{
+      if (col_off == 0){
+        vars_local[row_off] = 1.0f;
+        means_local[row_off] = 0.0f;
+      }
+      betta_buffer[row_off][col_off] = 0.0;
+      gamma_buffer[row_off][col_off] = 0.0;
+    }
+    __syncthreads();
+
+    // then compute the local grad
+    betta_grad__ = betta_buffer[row_off][col_off];
+    gamma_grad__ = __fdividef(
+                    gamma_buffer[row_off][col_off] - means_local[row_off], 
+                    __fsqrt_rn(
+                      vars_local[row_off] + LN_EPSILON
+                    )
+                  ) * betta_grad__;
+    __syncthreads();
+              
+    // then reduce inside a warp
+    for (int i = 1; i < TILE_DIM; i <<= 1) {
+      betta_grad__ += g.shfl_xor(betta_grad__, i);
+      gamma_grad__ += g.shfl_xor(gamma_grad__, i);
+    }
+
+    // add to the shared memory to record
+    if (row_off == 0){
+      betta_grad_[col_off] += betta_grad__;
+      gamma_grad_[col_off] += gamma_grad__;
+    }
+    
+  }
+
+  // write back to the global memory
+  if (row_off == 0){
+    betta_grad[col] = betta_grad_[col_off];
+    gamma_grad[col] = gamma_grad_[col_off];
+  }
 }
 
 /**
@@ -246,10 +310,11 @@ vars: [batch_size * seq_len], variance of ln forward,
 means: [batch_size * seq_len], mean of ln forward,
   used to compute xhat, maybe nullptr
 */
+// TODO(JHY): optimize, cancel betta for all backward...
 template <typename T>
 __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
                                const T *gamma, const T *betta, const T *vars,
-                               const T *means, int hidden_dim) {
+                               const T *means, int hidden_size) {
   
   /// BEGIN ASSIGN3_2
   /// TODO
@@ -259,16 +324,56 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 3. Compute reduce sum for dxhat and dxhat*xhat with blockReduce
   // 4. Compute final gradient
   
-  // Step 1
- 
-  // Step 2
-   
-  // Step 3
- 
-  // Step 4
   
-  assert(false && "Not Implemented");
-  /// END ASSIGN3_2
+  // Step 1: load vars and mean
+  const int row = blockIdx.x;
+  const int col_base = threadIdx.x;
+  const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + row * hidden_size;  
+  const float4 *out_grad_f4 = reinterpret_cast<const float4 *>(out_grad) + row * hidden_size; 
+  float4 *inp_grad_f4 = reinterpret_cast<float4 *>(inp_grad) + row * hidden_size; // need to save the output
+  const float4 *gamma_f4 = reinterpret_cast<const float4 *>(gamma);
+  __shared__ float local_mean, local_sigma_inv;
+  if (col_base == 0){
+    local_mean = means[row];
+    local_sigma_inv = __fdividef(1.0f, __fsqrt_rn(vars[row] + LN_EPSILON));
+  }
+  __syncthreads();
+
+  // Step 2.1: Walk through the region this thread for, do a local reduce
+  float l_sum[2] = {0.0, 0.0};
+  for (uint idx = col_base; idx < hidden_size; idx += blockDim.x) {
+    float4 g_o_mul_gamma = out_grad_f4[idx] * gamma_f4[idx];
+    l_sum[0] += sum_reduce(g_o_mul_gamma);
+    l_sum[1] += sum_reduce(g_o_mul_gamma * ((inp_f4[idx] - local_mean) * local_sigma_inv));
+  }
+
+  // Step 2.2: Block Reduce
+  blockReduce<ReduceType::kSum, 2>(l_sum);
+
+
+  // Step 3: Write back result
+  for (uint idx = col_base; idx < hidden_size; idx += blockDim.x) {
+    inp_grad_f4[idx] = (
+      (
+        out_grad_f4[idx] 
+          * 
+        gamma_f4[idx] 
+          * 
+        local_sigma_inv
+      ) 
+        - 
+      (
+        ((inp_f4[idx] - local_mean) * local_sigma_inv) 
+          * 
+        l_sum[1] 
+          + 
+        l_sum[0]
+      ) 
+        * 
+      __fdividef(local_sigma_inv, hidden_size * 4.0f)
+    );
+  }
+
 }
 extern "C" {
 void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
@@ -305,10 +410,16 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   // Compute grad of gamma and betta
   // This calculates the number of blocks needed to cover the data along the specified dimension, rounds it up.
   // The result is then multiplied by TILE_DIM to ensure that the grid size is a multiple of TILE_DIM.
-  dim3 grid_dim(((hidden_dim + TILE_DIM - 1) / TILE_DIM) * TILE_DIM);
+  dim3 grid_dim(((hidden_dim + TILE_DIM - 1) / TILE_DIM));
+  /*
+    Prevously, the code in the above line is: dim3 grid_dim(((hidden_dim + TILE_DIM - 1) / TILE_DIM) * TILE_DIM);
+    IDK which idiot comes up with that...
+    Actually if it's that way, each block will be responsible for a single col's reduction, thus we do not need a 2D shared Matrix...
+    Such a stupid a** h*** (* TILE_DIM)
+  */
   dim3 block_dim(TILE_DIM, TILE_DIM);
   ker_ln_bw_dgamma_dbetta<float><<<grid_dim, block_dim, 0, stream_1>>>(
-      d_gamma_grad, d_betta_grad, d_out_grad, d_inp, d_gamma, d_betta, d_vars,
+      d_gamma_grad, d_betta_grad, d_out_grad, d_inp, d_vars,
       d_means, batch_size, hidden_dim);
 
   // Compute grad of input
