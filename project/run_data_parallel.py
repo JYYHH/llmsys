@@ -32,9 +32,11 @@ def average_gradients(model):
     2. Use `torch.distributed` package and call the reduce fucntion to aggregate the gradients of all the parameters
     3. Average the gradients over the world_size (total number of devices)
     '''
-    # BEGIN SOLUTION
-    raise NotImplementedError("Data Parallel Not Implemented Yet")
-    # END SOLUTION
+    for param in model.parameters():
+        # need an all-reduce to sync the gradients
+        dist.all_reduce(param.grad, op = dist.ReduceOp.SUM)
+        # then average the gradients
+        param.grad /= dist.get_world_size()
 
 # ASSIGNMENT 4.1
 def setup(rank, world_size, backend):
@@ -43,9 +45,8 @@ def setup(rank, world_size, backend):
     1. Set the environment variables `MASTER_ADDR` as `localhost` or `127.0.0.1`  and `MASTER_PORT` as `11868`
     2. Use `torch.distributed` to init the process group
     '''
-    # BEGIN SOLUTION
-    raise NotImplementedError("Data Parallel Not Implemented Yet")
-    # END SOLUTION
+    torch.cuda.set_device(rank)
+    dist.init_process_group(backend = backend, world_size = world_size, rank = rank)
 
 
 def run_dp(
@@ -174,7 +175,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_epochs', type=int, default=10)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
-    parser.add_argument('--world_size', type=int, default=2)
+    parser.add_argument('--world_size', type=int, default = 4)
     args = parser.parse_args()
     if args.pytest:
         PYTEST = True
@@ -182,17 +183,31 @@ if __name__ == '__main__':
         PYTEST = False
 
     processes = []
+    # set the environment here
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '11868'
+    world_size = args.world_size
+    backend = "nccl"
 
-    # ASSIGNMENT 4.1
-    '''Create Process to start distributed training
+    for rank in range(world_size):
+        p = Process(
+                target = run_dp, 
+                args = (
+                        rank, 
+                        world_size, 
+                        backend, 
+                        args.dataset,
+                        args.model_max_length,
+                        args.n_epochs,
+                        args.batch_size,
+                        args.learning_rate,
+                    )
+            )
+        p.start()
+        processes.append(p)
 
-    Hint:
-    1. You can use Process from torch.distributed to define the process
-    2. You should start the processes to work and terminate resources properly
-    '''
-    # BEGIN SOLUTION
-    world_size = None  # TODO: Define the number of GPUs
-    backend = None  # TODO: Define your backend for communication, we suggest using 'nccl'
+    for p in processes:
+        p.join()
+
+
     
-    raise NotImplementedError("Data Parallel Not Implemented Yet")
-    # END SOLUTION

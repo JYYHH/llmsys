@@ -32,8 +32,16 @@ def test_data_partition(total_num, split_size):
 def test_gradient_accumulation():
     weight0 = torch.load(f"{current_dir}/model0_gradients.pth")
     weight1 = torch.load(f"{current_dir}/model1_gradients.pth")
+    weight2 = torch.load(f"{current_dir}/model2_gradients.pth")
+    weight3 = torch.load(f"{current_dir}/model3_gradients.pth")
 
     assert len(weight0) == len(weight1)
     assert weight0.keys() == weight1.keys()
+    assert len(weight0) == len(weight2)
+    assert weight0.keys() == weight2.keys()
+    assert len(weight0) == len(weight3)
+    assert weight0.keys() == weight3.keys()
     for key in weight0.keys():
-        assert torch.sum(weight0[key] != weight1[key]) == 0, f"No sync on gradient {key}"
+        assert torch.sum(weight0[key] != weight1[key]) == 0, f"No sync on gradient {key}, 0 != 1"
+        assert torch.sum(weight0[key] != weight2[key]) == 0, f"No sync on gradient {key}, 0 != 2"
+        assert torch.sum(weight0[key] != weight3[key]) == 0, f"No sync on gradient {key}, 0 != 3"

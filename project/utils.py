@@ -140,9 +140,7 @@ def train(model, optimizer, examples, batch_size, collate_fn, desc, rank=0, aver
         ''' Call the `average_gradients_fn` function to reduce and broadcast the gradients in Data Parallel
             Just few lines of code. Think simply.
         '''
-        # BEGIN SOLUTION
-        raise NotImplementedError("Data Parallel Not Implemented Yet")
-        # END SOLUTION
+        average_gradients_fn(model)
         optimizer.step()
         batch_time = time.time() - t0
         tokens = np.prod(batch['input_ids'].shape)
