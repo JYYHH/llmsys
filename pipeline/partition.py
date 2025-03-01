@@ -52,15 +52,25 @@ def _split_module(modules: nn.Sequential) -> Tuple[List[nn.Sequential], List[tor
     2. However, users might use the WithDevice class to wrap a module with a device. In this case, you should use the device from the WithDevice class.
     3. You can use the _assemble_partition function to assemble a partition from a list of modules.
     '''
+
+    # Loading different parts to dofferent devices is already done in model.py, 
+    # see GPT2ModelCustom().parallelize() for more details
+
     partitions = []
     devices = []
 
     current_partition = []
     current_device = None
     for name, module in modules.named_children():
-        # BEGIN SOLUTION
-        raise NotImplementedError("Module Splitting Not Implemented Yet")
-        # END SOLUTION
+        next_device = module.device if isinstance(module, WithDevice) else _retrieve_device(module)
+        module = module.module if isinstance(module, WithDevice) else module
+        if next_device != current_device:
+            if current_device is not None:
+                partitions.append(_assemble_partition(current_partition))
+                devices.append(current_device)
+            current_device = next_device
+            current_partition = []
+        current_partition.append(module)
 
     if current_device is not None:
         partitions.append(_assemble_partition(current_partition))

@@ -79,3 +79,28 @@ def test_forward_0(batch_size, split_size):
     pipe = Pipe(model, split_size=split_size)
     y1 = pipe(x).to('cpu')
     assert torch.allclose(y0, y1)
+
+@pytest.mark.a4_2_2
+@pytest.mark.parametrize("batch_size", [1, 16, 32, 64])
+@pytest.mark.parametrize("split_size", [1, 2, 4, 8, 16])
+def test_forward_1(batch_size, split_size):
+    model = nn.Sequential(
+        nn.Linear(3, 4).to('cuda:0'),
+        WithDevice(nn.Sigmoid(), 'cuda:0'),
+        nn.Linear(4, 5).to('cuda:0'),
+        WithDevice(nn.Sigmoid(), 'cuda:0'),
+        nn.Linear(5, 6).to('cuda:0'),
+        WithDevice(nn.Sigmoid(), 'cuda:0'),
+    )
+    
+    x = torch.randn(batch_size, 3).to('cuda:0')
+    y0 = model(x).to('cpu')
+
+    # move the last two layer to another device
+    model[-4] = model[-4].to('cuda:1')
+    model[-3] = WithDevice(nn.Sigmoid(), 'cuda:1')
+    model[-2] = model[-2].to('cuda:2')
+    model[-1] = WithDevice(nn.Sigmoid(), 'cuda:2')
+    pipe = Pipe(model, split_size=split_size)
+    y1 = pipe(x).to('cpu')
+    assert torch.allclose(y0, y1)

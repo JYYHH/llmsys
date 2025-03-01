@@ -4,8 +4,8 @@ import torch
 from torch import Tensor, nn
 import torch.autograd
 import torch.cuda
-from .worker import Task, create_workers
 from .partition import _split_module
+from threading import Thread
 
 # ASSIGNMENT 4.2
 def _clock_cycles(num_batches: int, num_partitions: int) -> Iterable[List[Tuple[int, int]]]:
@@ -26,9 +26,18 @@ def _clock_cycles(num_batches: int, num_partitions: int) -> Iterable[List[Tuple[
     Each schedule is a list of tuples. Each tuple contains the index of micro-batch and the index of partition.
     This function should yield schedules for each clock cycle.
     '''
-    # BEGIN SOLUTION
-    raise NotImplementedError("Schedule Generation Not Implemented Yet")
-    # END SOLUTION
+    for time in range(num_batches + num_partitions - 1):
+        yield [
+                (time - part_idx, part_idx) 
+                for part_idx in range(
+                    max(0, time - num_batches + 1), 
+                    min(time + 1, num_partitions)
+                )
+            ]
+
+result_ = {}
+def worker_func(worker_idx, func):
+    result_[worker_idx] = func()
 
 class Pipe(nn.Module):
     def __init__(
@@ -40,36 +49,47 @@ class Pipe(nn.Module):
 
         self.split_size = int(split_size)
         self.partitions, self.devices = _split_module(module)
-        (self.in_queues, self.out_queues) = create_workers(self.devices)
+        self.num_pipe_layers = len(self.devices)
 
     # ASSIGNMENT 4.2
     def forward(self, x):
-        ''' Forward the input x through the pipeline. The return value should be put in the last device.
-
-        Hint:
-        1. Divide the input mini-batch into micro-batches.
-        2. Generate the clock schedule.
-        3. Call self.compute to compute the micro-batches in parallel.
-        4. Concatenate the micro-batches to form the mini-batch and return it.
-        '''
-        # BEGIN SOLUTION
-        raise NotImplementedError("Pipeline Parallel Not Implemented Yet")
-        # END SOLUTION
+        # file = open("out.txt", "w")
+        actived_split_size = min(x.shape[0], self.split_size) # for self.split_size > batch_size
+        mini_batch_size = (x.shape[0] + actived_split_size - 1) // actived_split_size
+        batches = [ x[i * mini_batch_size: (i + 1) * mini_batch_size] for i in range(actived_split_size) ]
+        for cur_sch in _clock_cycles(actived_split_size, self.num_pipe_layers):
+            # print(cur_sch)
+            # file.write(str(cur_sch))
+            self.compute(batches, cur_sch)
+        # file.close()
+        return torch.cat(batches, 0)
 
     # ASSIGNMENT 4.2
     def compute(self, batches, schedule: List[Tuple[int, int]]) -> None:
-        '''Compute the micro-batches in parallel.
-
-        Hint:
-        1. Retrieve the partition and microbatch from the schedule.
-        2. Use Task to send the computation to a worker. 
-        3. Use the in_queues and out_queues to send and receive tasks.
-        4. Store the result back to the batches.
-        '''
         partitions = self.partitions
         devices = self.devices
+        
+        threads = []
+        # Step 1: push each work into a worker
+        for (batch_idx, worker_idx) in schedule:
+            t = Thread(
+                    target = worker_func, 
+                    args = (worker_idx, lambda: partitions[worker_idx](batches[batch_idx])), 
+                    daemon = True,
+                )
+            t.start()
+            threads.append(t)
 
-        # BEGIN SOLUTION
-        raise NotImplementedError("Pipeline Parallel Not Implemented Yet")
-        # END SOLUTION
-
+        # Step 2: Wait for the worker to end
+        for t in threads:
+            t.join()
+        
+        # Step 3: fetch the result
+        for (batch_idx, worker_idx) in schedule:
+            batches[batch_idx] = result_[worker_idx]
+            if worker_idx + 1 < self.num_pipe_layers:
+                # put it to the next device
+                batches[batch_idx] = batches[batch_idx].to(devices[worker_idx + 1])
+            else:
+                print("Find error")
+    
